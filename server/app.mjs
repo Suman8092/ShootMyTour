@@ -204,6 +204,10 @@ async function overlapping(pid, start, end, exclude = "") {
   );
 }
 const rates = new Map();
+const clientIp = (req) =>
+  (typeof req?.headers?.["x-forwarded-for"] === "string"
+    ? req.headers["x-forwarded-for"].split(",")[0].trim()
+    : req?.headers?.["x-real-ip"] || req?.socket?.remoteAddress || "127.0.0.1");
 function limit(key, maximum = 15) {
   const time = Date.now();
   let r = rates.get(key);
@@ -519,7 +523,7 @@ async function route(req, res, path, q, body, raw, u, session) {
     method === "POST" &&
     ["/api/auth/register", "/api/auth/register-photographer"].includes(path)
   ) {
-    limit("register:" + req.socket.remoteAddress);
+    limit("register:" + clientIp(req));
     const name = str(body.name, "name", 100),
       email = str(body.email, "email", 254).toLowerCase(),
       password = str(body.password, "password", 128);
@@ -569,7 +573,7 @@ async function route(req, res, path, q, body, raw, u, session) {
     return { ok: true };
   }
   if (method === "POST" && path === "/api/auth/login") {
-    limit("login:" + req.socket.remoteAddress);
+    limit("login:" + clientIp(req));
     const email = str(body.email, "email", 254).toLowerCase(),
       password = str(body.password, "password", 128);
     let user = await get("SELECT * FROM users WHERE email=?", email);
@@ -620,7 +624,7 @@ async function route(req, res, path, q, body, raw, u, session) {
     return { ok: true };
   }
   if (method === "POST" && path === "/api/auth/forgot-password") {
-    limit("reset:" + req.socket.remoteAddress, 5);
+    limit("reset:" + clientIp(req), 5);
     const user = await get(
       "SELECT id FROM users WHERE email=?",
       str(body.email, "email", 254),
@@ -651,7 +655,7 @@ async function route(req, res, path, q, body, raw, u, session) {
     };
   }
   if (method === "POST" && path === "/api/auth/reset-password") {
-    limit("reset-confirm:" + req.socket.remoteAddress);
+    limit("reset-confirm:" + clientIp(req));
     const password = str(body.password, "password", 128);
     if (password.length < 10) fail(400, "Use at least 10 characters");
     const token = await get(
@@ -1792,22 +1796,25 @@ export async function handler(req, res) {
       );
     res.end(req.method === "HEAD" ? undefined : readFileSync(file));
   } catch (e) {
+    const isUnique =
+      e.message?.includes("UNIQUE constraint") ||
+      e.message?.includes("duplicate key") ||
+      e.message?.includes("already exists");
     const statusCode =
       e.status ||
-      (e.message?.includes("UNIQUE constraint") ||
-      e.message?.includes("Overlapping availability")
+      (isUnique || e.message?.includes("Overlapping availability")
         ? 409
         : 500);
-    if (statusCode === 500) console.error("[request error]", e.message);
+    if (statusCode === 500) console.error("[request error]", e.message, e.stack);
     res.statusCode = statusCode;
     res.setHeader("Content-Type", "application/json");
     res.end(
       JSON.stringify({
         error:
-          statusCode === 500
-            ? "Unexpected server error. Please try again."
-            : statusCode === 409 && !e.status
-              ? "This record already exists or overlaps another reservation."
+          isUnique && !e.status
+            ? "This email or record already exists."
+            : statusCode === 500
+              ? (e.message || "Unexpected server error. Please try again.")
               : e.message,
       }),
     );

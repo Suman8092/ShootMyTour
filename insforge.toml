@@ -1,5 +1,5 @@
 [auth]
-allowed_redirect_urls = ["http://localhost:3000", "http://localhost:3000/login", "http://localhost:3000/dashboard", "http://localhost:3000/api/auth/oauth/callback"]
+allowed_redirect_urls = ["http://localhost:3000", "http://localhost:3000/login", "http://localhost:3000/dashboard", "http://localhost:3000/api/auth/oauth/callback", "https://shoot-my-tour.vercel.app", "https://shoot-my-tour.vercel.app/login", "https://shoot-my-tour.vercel.app/dashboard", "https://shoot-my-tour.vercel.app/api/auth/oauth/callback"]
 require_email_verification = false
 verify_email_method = "code"
 reset_password_method = "code"
