@@ -18,7 +18,7 @@ import {
   closeDb,
   isCloudPostgres,
 } from "./db-adapter.mjs";
-import { createClient } from "@insforge/sdk";
+import { createClient, createAdminClient } from "@insforge/sdk";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 if (existsSync(resolve(ROOT, ".env.local"))) {
   try { process.loadEnvFile(resolve(ROOT, ".env.local")); } catch {}
@@ -29,6 +29,7 @@ if (existsSync(resolve(ROOT, ".env"))) {
 
 
 let insforge = null;
+let insforgeAdmin = null;
 if (
   process.env.INSFORGE_URL &&
   (process.env.INSFORGE_ANON_KEY || process.env.INSFORGE_API_KEY)
@@ -40,6 +41,16 @@ if (
     });
   } catch (e) {
     console.warn("InsForge initialization failed:", e.message);
+  }
+}
+if (process.env.INSFORGE_URL && process.env.INSFORGE_API_KEY) {
+  try {
+    insforgeAdmin = createAdminClient({
+      baseUrl: process.env.INSFORGE_URL,
+      apiKey: process.env.INSFORGE_API_KEY,
+    });
+  } catch (e) {
+    console.warn("InsForge Admin Client initialization failed:", e.message);
   }
 }
 const PORT = Number(process.env.PORT || 3000),
@@ -160,6 +171,80 @@ async function notify(user, title, message) {
   );
   void emailWorker();
 }
+async function sendWhatsApp(phone, text) {
+  if (!phone) return;
+  const cleanPhone = String(phone).replace(/\D/g, "").slice(-10);
+  if (cleanPhone.length !== 10) return;
+  const fullPhone = "91" + cleanPhone;
+
+  await run(
+    "INSERT INTO audit_logs(id,booking_id,actor_id,action,old_status,new_status,note,created_at) VALUES(?,?,?,?,?,?,?,?)",
+    id(),
+    null,
+    null,
+    "WHATSAPP_NOTIFICATION",
+    null,
+    null,
+    `To: +${fullPhone} | ${text.slice(0, 120)}`,
+    now(),
+  ).catch(() => {});
+
+  console.log(`[WhatsApp Alert] -> +${fullPhone}: ${text}`);
+
+  if (process.env.WHATSAPP_API_TOKEN && process.env.WHATSAPP_PHONE_NUMBER_ID) {
+    try {
+      await fetch(
+        `https://graph.facebook.com/v20.0/${process.env.WHATSAPP_PHONE_NUMBER_ID}/messages`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${process.env.WHATSAPP_API_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            messaging_product: "whatsapp",
+            to: fullPhone,
+            type: "text",
+            text: { body: text },
+          }),
+        },
+      );
+      console.log(`[Meta WhatsApp Cloud API Delivered] -> +${fullPhone}`);
+    } catch (err) {
+      console.warn("[Meta WhatsApp API Notice]", err.message);
+    }
+  }
+
+  if (
+    process.env.TWILIO_ACCOUNT_SID &&
+    process.env.TWILIO_AUTH_TOKEN &&
+    process.env.TWILIO_WHATSAPP_FROM
+  ) {
+    try {
+      const auth = Buffer.from(
+        `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`,
+      ).toString("base64");
+      const form = new URLSearchParams();
+      form.append("From", `whatsapp:${process.env.TWILIO_WHATSAPP_FROM}`);
+      form.append("To", `whatsapp:+${fullPhone}`);
+      form.append("Body", text);
+      await fetch(
+        `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Messages.json`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${auth}`,
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: form.toString(),
+        },
+      );
+      console.log(`[Twilio WhatsApp Delivered] -> +${fullPhone}`);
+    } catch (err) {
+      console.warn("[Twilio WhatsApp Notice]", err.message);
+    }
+  }
+}
 async function status(b, next, actor, note = "") {
   await run("UPDATE bookings SET status=?,hold_until=NULL WHERE id=?", next, b.id);
   await log(actor, "BOOKING_STATUS", b.id, b.status, next, note);
@@ -177,6 +262,23 @@ async function status(b, next, actor, note = "") {
       p.user_id,
       "Booking update",
       `${b.package_title}: ${next.replaceAll("_", " ")}.`,
+    );
+  }
+  const customerUser = await get("SELECT phone,name FROM users WHERE id=?", b.user_id);
+  const photographerUser = await get(
+    "SELECT u.phone,u.name FROM photographers ph JOIN users u ON u.id=ph.user_id WHERE ph.id=?",
+    b.photographer_id,
+  );
+  if (customerUser?.phone) {
+    void sendWhatsApp(
+      customerUser.phone,
+      `Namaste ${customerUser.name}! ShootMyTour update for '${b.package_title}': Status is now ${next.replaceAll("_", " ")}. ${note}`.trim(),
+    );
+  }
+  if (photographerUser?.phone) {
+    void sendWhatsApp(
+      photographerUser.phone,
+      `Namaste ${photographerUser.name}! ShootMyTour update for '${b.package_title}': Status is now ${next.replaceAll("_", " ")}.`,
     );
   }
 }
@@ -917,29 +1019,37 @@ async function route(req, res, path, q, body, raw, u, session) {
             b.toString("ascii", 8, 12) === "WEBP";
     if (!valid) fail(400, "Invalid image file");
     const name = id() + "." + match[1];
+    let imageUrl = "/uploads/" + name;
     try {
       writeFileSync(resolve(DATA, "uploads", name), b);
     } catch (err) {
       console.warn("Notice: local disk write skipped:", err.message);
     }
-    if (insforge) {
-      void insforge.storage
-        .from("portfolios")
-        .upload(`photographers/${p.id}/${name}`, b, {
-          contentType: `image/${match[1]}`,
-          upsert: true,
-        })
-        .catch(() => {});
+    if (insforgeAdmin) {
+      try {
+        const blob = new Blob([b], { type: `image/${match[1]}` });
+        const { data: sData, error: sErr } = await insforgeAdmin.storage
+          .from("portfolios")
+          .upload(name, blob, { upsert: true });
+        if (sData?.url) {
+          imageUrl = sData.url;
+        } else if (process.env.INSFORGE_URL) {
+          imageUrl = `${process.env.INSFORGE_URL}/api/storage/buckets/portfolios/objects/${name}`;
+        }
+        if (sErr) console.warn("InsForge storage upload notice:", sErr.message);
+      } catch (err) {
+        console.warn("InsForge storage upload exception:", err.message);
+      }
     }
     await run(
       "INSERT INTO portfolios(id,photographer_id,image,caption,category) VALUES(?,?,?,?,?)",
       id(),
       p.id,
-      "/uploads/" + name,
+      imageUrl,
       str(body.caption || "", "caption", 200, false),
       str(body.category || "Travel", "category", 60),
     );
-    return { ok: true };
+    return { ok: true, image: imageUrl };
   }
   if (/^\/api\/photographer\/portfolio\/[^/]+$/.test(path)) {
     const p = await photographer(u),
@@ -1061,8 +1171,23 @@ async function route(req, res, path, q, body, raw, u, session) {
   }
   if (method === "GET" && /^\/api\/bookings\/[^/]+$/.test(path)) {
     const b = await booking(u, path.split("/")[3]);
+    const customerUser = await get("SELECT phone,name,email FROM users WHERE id=?", b.user_id);
+    const photographerUser = await get(
+      "SELECT u.phone,u.name,u.email FROM photographers ph JOIN users u ON u.id=ph.user_id WHERE ph.id=?",
+      b.photographer_id,
+    );
+    const cleanCustomerPhone = customerUser?.phone ? String(customerUser.phone).replace(/\D/g, "").slice(-10) : "";
+    const cleanPhotographerPhone = photographerUser?.phone ? String(photographerUser.phone).replace(/\D/g, "").slice(-10) : "";
+    const shootText = encodeURIComponent(`Hi! Regarding ShootMyTour booking #${b.id.slice(0, 8)} (${b.package_title}):`);
+    const whatsapp = {
+      customerPhone: cleanCustomerPhone ? `+91${cleanCustomerPhone}` : null,
+      photographerPhone: cleanPhotographerPhone ? `+91${cleanPhotographerPhone}` : null,
+      chatWithPhotographerUrl: cleanPhotographerPhone ? `https://wa.me/91${cleanPhotographerPhone}?text=${shootText}` : null,
+      chatWithCustomerUrl: cleanCustomerPhone ? `https://wa.me/91${cleanCustomerPhone}?text=${shootText}` : null,
+    };
     return {
       ...b,
+      whatsapp,
       messages: await all(
         "SELECT m.*,u.name FROM messages m JOIN users u ON u.id=m.sender_id WHERE booking_id=? ORDER BY created_at",
         b.id,
@@ -1741,9 +1866,11 @@ export async function handler(req, res) {
     if (!["GET", "HEAD"].includes(req.method)) fail(405, "Method not allowed");
     const upload = path.startsWith("/uploads/");
     if (upload) {
+      const imageName = path.slice(9);
       const image = await get(
-        "SELECT i.approved,p.user_id FROM portfolios i JOIN photographers p ON p.id=i.photographer_id WHERE i.image=?",
+        "SELECT i.approved,p.user_id FROM portfolios i JOIN photographers p ON p.id=i.photographer_id WHERE i.image=? OR i.image LIKE '%' || ?",
         path,
+        imageName,
       );
       if (!image) fail(404, "Image not found");
       if (!image.approved) {
@@ -1769,7 +1896,15 @@ export async function handler(req, res) {
     if (!file.startsWith(base + "/") && !file.startsWith(base + sep) && file !== base)
       fail(403, "Invalid path");
     if (!extname(path)) file = resolve(ROOT, "public/index.html");
-    if (!existsSync(file)) fail(404, "File not found");
+    if (!existsSync(file)) {
+      if (upload && process.env.INSFORGE_URL) {
+        const cloudUrl = `${process.env.INSFORGE_URL}/api/storage/buckets/portfolios/objects/${path.slice(9)}`;
+        res.writeHead(302, { Location: cloudUrl });
+        res.end();
+        return;
+      }
+      fail(404, "File not found");
+    }
     const mime = {
       ".html": "text/html; charset=utf-8",
       ".js": "text/javascript; charset=utf-8",
