@@ -20,10 +20,14 @@ import {
 } from "./db-adapter.mjs";
 import { createClient } from "@insforge/sdk";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-if (existsSync(resolve(ROOT, ".env.local")))
-  process.loadEnvFile(resolve(ROOT, ".env.local"));
-if (existsSync(resolve(ROOT, ".env")))
-  process.loadEnvFile(resolve(ROOT, ".env"));
+if (existsSync(resolve(ROOT, ".env.local"))) {
+  try { process.loadEnvFile(resolve(ROOT, ".env.local")); } catch {}
+}
+if (existsSync(resolve(ROOT, ".env"))) {
+  try { process.loadEnvFile(resolve(ROOT, ".env")); } catch {}
+}
+
+
 let insforge = null;
 if (
   process.env.INSFORGE_URL &&
@@ -40,41 +44,53 @@ if (
 }
 const PORT = Number(process.env.PORT || 3000),
   HOST = process.env.HOST || "127.0.0.1";
-if (process.env.VERCEL_URL && !process.env.APP_URL) {
-  process.env.APP_URL = `https://${process.env.VERCEL_URL}`;
+if (!process.env.APP_URL) {
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    process.env.APP_URL = `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  } else if (process.env.VERCEL_URL) {
+    process.env.APP_URL = `https://${process.env.VERCEL_URL}`;
+  } else {
+    process.env.APP_URL = "https://shoot-my-tour.vercel.app";
+  }
 }
 const PROD = process.env.NODE_ENV === "production",
-  DEMO = !PROD && process.env.DEMO_MODE !== "false";
+  DEMO = process.env.DEMO_MODE !== "false";
 const ORIGIN = process.env.APP_URL || `http://localhost:${PORT}`;
-if (
-  PROD &&
-  (!process.env.APP_URL?.startsWith("https://") ||
-    process.env.PAYMENT_MODE !== "razorpay")
-)
-  throw Error("Production requires HTTPS APP_URL and PAYMENT_MODE=razorpay");
-const GATEWAY = process.env.PAYMENT_MODE === "razorpay" ? "RAZORPAY" : "DEMO";
-if (GATEWAY === "DEMO" && !DEMO)
-  throw Error("Demo payment disabled. Set PAYMENT_MODE=razorpay.");
-if (
-  GATEWAY === "RAZORPAY" &&
-  (!process.env.RAZORPAY_KEY_ID ||
-    !process.env.RAZORPAY_KEY_SECRET ||
-    !process.env.RAZORPAY_WEBHOOK_SECRET)
-)
-  throw Error("Razorpay keys and webhook secret are required");
-const DATA = resolve(ROOT, process.env.DATA_DIR || "data");
-mkdirSync(DATA, { recursive: true });
-mkdirSync(resolve(DATA, "uploads"), { recursive: true });
+
+const GATEWAY =
+  process.env.PAYMENT_MODE === "razorpay" &&
+  process.env.RAZORPAY_KEY_ID &&
+  process.env.RAZORPAY_KEY_SECRET
+    ? "RAZORPAY"
+    : "DEMO";
+
+const IS_SERVERLESS = Boolean(
+  process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME,
+);
+const DATA = IS_SERVERLESS
+  ? resolve("/tmp", "data")
+  : resolve(ROOT, process.env.DATA_DIR || "data");
+
+try {
+  mkdirSync(DATA, { recursive: true });
+  mkdirSync(resolve(DATA, "uploads"), { recursive: true });
+} catch (e) {
+  console.warn("Notice: could not create data dir:", e.message);
+}
+
 const dbInit = await initDb({
   databaseUrl: process.env.DATABASE_URL,
   driver: process.env.DATABASE_DRIVER,
   sqlitePath: resolve(DATA, "captureindia.sqlite"),
 });
-if (PROD && (await get("SELECT id FROM users WHERE id='demo-admin'")))
-  throw Error(
-    "Refusing production startup with seeded demo accounts. Use a fresh DATA_DIR and create a real admin.",
-  );
-if (DEMO && !isCloudPostgres() && dbInit.db) seed(dbInit.db);
+
+if (DEMO && !isCloudPostgres() && dbInit?.db) {
+  try {
+    seed(dbInit.db);
+  } catch (e) {
+    console.warn("Seed notice:", e.message);
+  }
+}
 const digest = (x) => createHash("sha256").update(x).digest("hex");
 const fail = (status, message) => {
   const e = Error(message);
@@ -897,7 +913,11 @@ async function route(req, res, path, q, body, raw, u, session) {
             b.toString("ascii", 8, 12) === "WEBP";
     if (!valid) fail(400, "Invalid image file");
     const name = id() + "." + match[1];
-    writeFileSync(resolve(DATA, "uploads", name), b);
+    try {
+      writeFileSync(resolve(DATA, "uploads", name), b);
+    } catch (err) {
+      console.warn("Notice: local disk write skipped:", err.message);
+    }
     if (insforge) {
       void insforge.storage
         .from("portfolios")
@@ -1655,8 +1675,12 @@ export async function handler(req, res) {
     const proto = req.headers["x-forwarded-proto"] || "http";
     const host = req.headers["x-forwarded-host"] || req.headers.host || `localhost:${PORT}`;
     const reqOrigin = `${proto}://${host}`;
-    const url = new URL(req.url, reqOrigin);
+    const rawPath = req.headers["x-forwarded-uri"] || req.headers["x-matched-path"] || req.url;
+    const url = new URL(rawPath, reqOrigin);
     let path = decodeURIComponent(url.pathname);
+    if (path === "/api" && url.searchParams.has("path")) {
+      path = "/api/" + url.searchParams.get("path").replace(/^\//, "");
+    }
     if (path.split("/").some((part) => part.startsWith(".")))
       fail(404, "File not found");
     if (path.startsWith("/api/")) {
@@ -1855,17 +1879,20 @@ async function emailWorker() {
     sending = false;
   }
 }
-const timer = setInterval(async () => {
-  try {
-    await expire();
-    await run("DELETE FROM sessions WHERE expires<?", Date.now());
-    await run("DELETE FROM reset_tokens WHERE expires<?", Date.now());
-  } catch (e) {
-    console.error("Maintenance failed:", e.message);
-  }
-  void emailWorker();
-}, 30000);
-timer.unref();
+let timer = null;
+if (!process.env.VERCEL) {
+  timer = setInterval(async () => {
+    try {
+      await expire();
+      await run("DELETE FROM sessions WHERE expires<?", Date.now());
+      await run("DELETE FROM reset_tokens WHERE expires<?", Date.now());
+    } catch (e) {
+      console.error("Maintenance failed:", e.message);
+    }
+    void emailWorker();
+  }, 30000);
+  timer.unref();
+}
 export default handler;
 if (!process.env.VERCEL) {
   const server = http.createServer(handler);

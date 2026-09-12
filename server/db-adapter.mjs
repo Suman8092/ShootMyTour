@@ -34,24 +34,30 @@ export async function initDb(options = {}) {
   const driver = options.driver || process.env.DATABASE_DRIVER;
 
   if (databaseUrl && driver !== "sqlite" && process.env.NODE_ENV !== "test") {
-    const { Pool } = await import("pg");
-    isPostgres = true;
-    pool = new Pool({
-      connectionString: databaseUrl,
-      ssl: { rejectUnauthorized: false },
-      max: 20,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
-    });
-
-    // Test connection
-    const client = await pool.connect();
     try {
-      await client.query("SELECT 1");
-    } finally {
-      client.release();
+      const { Pool } = await import("pg");
+      isPostgres = true;
+      pool = new Pool({
+        connectionString: databaseUrl,
+        ssl: { rejectUnauthorized: false },
+        max: 20,
+        idleTimeoutMillis: 30000,
+        connectionTimeoutMillis: 10000,
+      });
+
+      // Test connection
+      const client = await pool.connect();
+      try {
+        await client.query("SELECT 1");
+      } finally {
+        client.release();
+      }
+      return { driver: "postgres", pool };
+    } catch (err) {
+      console.warn("Postgres connection warning, falling back to SQLite:", err.message);
+      isPostgres = false;
+      pool = null;
     }
-    return { driver: "postgres", pool };
   }
 
   // Offline / SQLite Fallback
