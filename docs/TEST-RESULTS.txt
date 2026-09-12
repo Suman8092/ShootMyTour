@@ -1,0 +1,44 @@
+
+> captureindia@1.0.0-local-mvp test
+> node --test tests/integration.test.mjs
+
+(node:1049) ExperimentalWarning: SQLite is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+✔ 1. Seed has ten cities, three approved photographers, nine packages and thirty slots (315.299792ms)
+✔ 2. Public filtering returns selected city and empty matches safely (6.45097ms)
+✔ 3. Passwords are hashed and never included in account response (2.895607ms)
+✔ 4. Guests and customers cannot read admin workspace (4.35808ms)
+✔ 5. Forged origin and missing CSRF token are rejected (2.694999ms)
+✔ 6. Signup cannot inject elevated role (88.023284ms)
+✔ 7. Invalid booking data and inactive packages are rejected (5.948133ms)
+✔ 8. Coupon discount, price and commission calculated on server (2.937908ms)
+✔ 9. Concurrent requests cannot reserve a held interval (15.328677ms)
+✔ 10. Another customer cannot view booking, chat or pay for it (4.497089ms)
+✔ 11. Photographer cannot accept without verified payment (1.993984ms)
+✔ 12. Order creation is repeatable without duplicate pending orders (4.386783ms)
+✔ 13. Failed test payment cannot confirm booking; retry creates another attempt (6.470583ms)
+✔ 14. Successful settlement is idempotent and awaits photographer (5.080158ms)
+✔ 15. Photographer accepts paid booking; future completion is rejected (3.445184ms)
+✔ 16. Customer cannot review an uncompleted booking (2.344054ms)
+✔ 17. Booking thread persists text without executing HTML (3.507347ms)
+✔ 18. Completed past shoot allows delivery, exactly one review and payout (21.954638ms)
+✔ 19. Moderation removes hidden reviews from public rating (3.583889ms)
+✔ 20. Paid cancellation is separate from refund; admin can refund once (15.02375ms)
+✔ 21. Expired reservation accepts late payment only into refund review, never confirmation (13.771334ms)
+✔ 22. Availability overlap is rejected; booked windows cannot be blocked (3.303966ms)
+✔ 23. Another photographer cannot edit a package they do not own (44.964168ms)
+✔ 24. Pending photographer hidden from public discovery until approved (99.225717ms)
+✔ 25. Portfolio rejects mismatched file signatures and executable image types (3.227591ms)
+✔ 26. Notifications and audit logs are persisted (2.405463ms)
+✔ 27. Admin can deactivate account and invalidate its session (4.564389ms)
+✔ 28. Password reset is non-enumerating, single-use and revokes sessions (51.70498ms)
+✔ 29. Static security headers and SPA deep links are available (2.409716ms)
+✔ 30. Demo webhook is disabled and admin self-deactivation is blocked (3.018578ms)
+ℹ tests 30
+ℹ suites 0
+ℹ pass 30
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 943.428101

@@ -1,0 +1,35 @@
+{
+  "name": "shootmytour",
+  "version": "1.0.0-local-mvp",
+  "private": true,
+  "type": "module",
+  "description": "Runnable ShootMyTour marketplace MVP: React + native Node.js + SQLite",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "start": "node server/app.mjs",
+    "dev": "node --watch server/app.mjs",
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/integration.test.mjs",
+    "check": "node --check server/app.mjs && node --check server/db.mjs",
+    "admin:create": "node scripts/create-admin.mjs",
+    "demo:reset": "node scripts/reset-demo.mjs",
+    "backup": "node scripts/backup.mjs"
+  },
+  "dependencies": {
+    "@insforge/sdk": "^1.5.2",
+    "pg": "^8.23.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@insforge/cli": "^0.2.8",
+    "@types/node": "22.13.5",
+    "@types/react": "19.0.10",
+    "@types/react-dom": "19.0.4",
+    "esbuild": "0.25.0",
+    "prettier": "3.5.0",
+    "typescript": "5.7.3"
+  }
+}

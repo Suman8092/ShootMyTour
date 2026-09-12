@@ -1,0 +1,25 @@
+node_modules/
+.env
+.env.local
+.env*.local
+data/
+.test-data/
+qa-data/
+backups/
+*.log
+.DS_Store
+
+# InsForge & AI agent skills
+.insforge
+.agent
+.agents
+.augment
+.claude
+.cline
+.github/copilot*
+.kilocode
+.qoder
+.qwen
+.roo
+.trae
+.windsurf

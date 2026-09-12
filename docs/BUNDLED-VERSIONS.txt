@@ -1,0 +1,5 @@
+react: 19.2.8
+react-dom: 19.2.8
+esbuild: 0.25.0
+typescript: 7.0.2
+Runtime used: Node.js v24.14.1
